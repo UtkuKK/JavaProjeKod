@@ -23,8 +23,8 @@ public class OduncIslemi {
     public static final String DURUM_DEVAM_EDIYOR   = "DEVAM_EDIYOR";
     public static final String DURUM_TESLIM_EDILDI  = "TESLIM_EDILDI";
 
-    // Günlük ceza ücreti (5.00 TL/gün)
-    public static final double GUNLUK_CEZA_UCRETI = 5.00;
+    // Günlük ceza ücreti (10.00 TL/gün)
+    public static final double GUNLUK_CEZA_UCRETI = 10.00;
 
     // ---------------------------------------------------------------
     // Alanlar

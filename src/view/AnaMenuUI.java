@@ -61,6 +61,7 @@ public class AnaMenuUI extends JFrame {
     private final KategoriDAO  kategoriDAO  = new KategoriDAO();
     private final YazarDAO     yazarDAO     = new YazarDAO();
     private final YayineviDAO  yayineviDAO  = new YayineviDAO();
+    private final dao.RezervasyonDAO rezervasyonDAO = new dao.RezervasyonDAO();
 
     // Kitap Yönetimi
     private JTable            kitapTablosu;
@@ -80,6 +81,13 @@ public class AnaMenuUI extends JFrame {
 
     // ==========================================
     private JComboBox<String> musaitBarkodlarCB;
+    private JComboBox<String> kullaniciCB;
+    
+    // Rezervasyon İşlemleri
+    private JTable rezervasyonTablosu;
+    private DefaultTableModel rezervasyonModeliTablo;
+    private JComboBox<String> rezKitapCB;
+    private JComboBox<String> rezKullaniciCB;
     // ==========================================
 
     // ---------------------------------------------------------------
@@ -193,12 +201,18 @@ public class AnaMenuUI extends JFrame {
         tp.addTab("   👤 Kullanıcı Yönetimi   ",  kullaniciYonetimiPaneliOlustur());
         tp.addTab("   🔄 Ödünç İşlemleri   ",     oduncIslemleriPaneliOlustur());
         tp.addTab("   ⚙️ Sistem Ayarları   ",      sistemAyarlariPaneliOlustur());
+        tp.addTab("   📅 Rezervasyonlar   ",      rezervasyonPaneliOlustur());
 
         // Sekme değiştiğinde yapılacak işlemler
         tp.addChangeListener(e -> {
             if (tp.getSelectedIndex() == 2) { // 3. sekme: Ödünç İşlemleri
                 musaitBarkodlariYukle();
+                kullaniciCBYukle();
                 istatistikleriGuncelle();
+            } else if (tp.getSelectedIndex() == 4) { // 5. sekme: Rezervasyonlar
+                rezervasyonlariYukle();
+                rezKitapCBYukle();
+                rezKullaniciCBYukle();
             }
         });
         return tp;
@@ -332,6 +346,23 @@ public class AnaMenuUI extends JFrame {
         // --- Düz metin alanları ---
         JTextField baslikAlani = tekAlaniOlustur();
         JTextField isbnAlani   = tekAlaniOlustur();
+        
+        ((javax.swing.text.AbstractDocument) isbnAlani.getDocument()).setDocumentFilter(new javax.swing.text.DocumentFilter() {
+            @Override public void insertString(FilterBypass fb, int offset, String string, javax.swing.text.AttributeSet attr) throws javax.swing.text.BadLocationException {
+                if (string == null) return;
+                if ((fb.getDocument().getLength() + string.length()) <= 13 && string.matches("\\d+")) {
+                    super.insertString(fb, offset, string, attr);
+                }
+            }
+            @Override public void replace(FilterBypass fb, int offset, int length, String text, javax.swing.text.AttributeSet attrs) throws javax.swing.text.BadLocationException {
+                if (text == null) {
+                    super.replace(fb, offset, length, text, attrs);
+                } else if ((fb.getDocument().getLength() - length + text.length()) <= 13 && text.matches("\\d+")) {
+                    super.replace(fb, offset, length, text, attrs);
+                }
+            }
+        });
+
         JTextField yilAlani    = tekAlaniOlustur();
 
         // --- JComboBox'lar (model nesnelerini tutar) ---
@@ -390,13 +421,18 @@ public class AnaMenuUI extends JFrame {
         iptal.addActionListener(e -> d.dispose());
         kaydet.addActionListener(e -> {
             // Doğrulama
-            if (baslikAlani.getText().trim().isEmpty() || isbnAlani.getText().trim().isEmpty()) {
+            String isbnGirdi = isbnAlani.getText().trim();
+            if (baslikAlani.getText().trim().isEmpty() || isbnGirdi.isEmpty()) {
                 JOptionPane.showMessageDialog(d, "Başlık ve ISBN zorunludur.", "Eksik Alan", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            if (!isbnGirdi.matches("^\\d{13}$")) {
+                JOptionPane.showMessageDialog(d, "ISBN hatalı veya eksik girildi!\n(Orijinal ISBN 13 haneli bir sayıdır, boşluksuz giriniz)", "Geçersiz ISBN", JOptionPane.WARNING_MESSAGE);
                 return;
             }
             Kitap k = new Kitap();
             k.setBaslik(baslikAlani.getText().trim());
-            k.setIsbn(isbnAlani.getText().trim());
+            k.setIsbn(isbnGirdi);
             try {
                 k.setYayinYili(yilAlani.getText().trim().isEmpty() ? 0 : Integer.parseInt(yilAlani.getText().trim()));
             } catch (NumberFormatException ex) {
@@ -469,10 +505,14 @@ public class AnaMenuUI extends JFrame {
         JButton yenile = renkliButonOlustur("⟳ Yenile",          RENK_VURGU,                 RENK_VURGU_HOVER);
         JButton ekle   = renkliButonOlustur("+ Kullanıcı Ekle",  RENK_BASARI,                RENK_BASARI.brighter());
         JButton durum  = renkliButonOlustur("⚡ Durum Değiştir",  new Color(180,120,30),      new Color(210,150,50));
+        JButton sil    = renkliButonOlustur("✕ Sil",             RENK_TEHLIKE,               RENK_TEHLIKE.brighter());
+        
         yenile.addActionListener(e -> kullanicilariYukle());
         ekle.addActionListener(e   -> kullaniciEkleDiyaloguGoster());
         durum.addActionListener(e  -> seciliKullaniciDurumDegistir());
-        arac.add(yenile); arac.add(durum); arac.add(ekle);
+        sil.addActionListener(e    -> seciliKullaniciyiSil());
+        
+        arac.add(yenile); arac.add(durum); arac.add(sil); arac.add(ekle);
 
         String[] s = {"ID", "Ad Soyad", "E-posta", "Rol", "Durum"};
         kullaniciModeliTablo = new DefaultTableModel(s, 0) {
@@ -548,6 +588,39 @@ public class AnaMenuUI extends JFrame {
         d.add(form, BorderLayout.CENTER); d.add(butonlar, BorderLayout.SOUTH); d.setVisible(true);
     }
 
+    private void seciliKullaniciyiSil() {
+        int satir = kullaniciTablosu.getSelectedRow();
+        if (satir < 0) { JOptionPane.showMessageDialog(this, "Silmek için bir kullanıcı seçin.", "Uyarı", JOptionPane.WARNING_MESSAGE); return; }
+        int id = (int) kullaniciModeliTablo.getValueAt(kullaniciTablosu.convertRowIndexToModel(satir), 0);
+        String adSoyad = (String) kullaniciModeliTablo.getValueAt(kullaniciTablosu.convertRowIndexToModel(satir), 1);
+        String rol = (String) kullaniciModeliTablo.getValueAt(kullaniciTablosu.convertRowIndexToModel(satir), 3);
+
+        if (aktifKullanici != null && aktifKullanici.getId() == id) {
+            JOptionPane.showMessageDialog(this, "Kendi hesabınızı silemezsiniz!", "Hata", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        String uyariMesaji = "<html><body><h3 style='margin-top:0; color:#DC2626;'>⚠️ Dikkat: Kullanıcı Silinecek</h3>" +
+                             "<b>\"" + adSoyad + "\" (" + rol + ")</b> adlı kullanıcıyı sistemden kalıcı olarak silmek üzeresiniz.<br><br>" +
+                             "Bu kişinin geçmiş rezervasyonları tamamen temizlenecektir.<br>" +
+                             "<i>Emin misiniz?</i></body></html>";
+
+        if (JOptionPane.showConfirmDialog(this, uyariMesaji, "Silme Onayı", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) == JOptionPane.YES_OPTION) {
+            new SwingWorker<Boolean, Void>() {
+                @Override protected Boolean doInBackground() { return kullaniciDAO.kullaniciSil(id); }
+                @Override protected void done() {
+                    try { 
+                        if (get()) { kullanicilariYukle(); basariMesaji("Kullanıcı başarıyla silindi."); }
+                        else hataGoster("Silmek işlemi başarısız.");
+                    } catch (Exception ex) { 
+                        Throwable t = ex.getCause() != null ? ex.getCause() : ex;
+                        hataGoster("Silinemedi, bu kullanıcının sistemde borcu/kitabı olabilir: " + t.getMessage()); 
+                    }
+                }
+            }.execute();
+        }
+    }
+
     private void seciliKullaniciDurumDegistir() {
         int satir = kullaniciTablosu.getSelectedRow();
         if (satir < 0) { JOptionPane.showMessageDialog(this, "Lütfen bir kullanıcı seçin.", "Uyarı", JOptionPane.WARNING_MESSAGE); return; }
@@ -607,7 +680,7 @@ public class AnaMenuUI extends JFrame {
         altBaslik.add(baslik, BorderLayout.WEST); altBaslik.add(yenile, BorderLayout.EAST);
         altBaslik.setBorder(new EmptyBorder(0, 0, 6, 0));
 
-        String[] s = {"ID", "Kitap", "Barkod", "Kullanıcı", "Verildi", "Son Teslim", "Gecikme (gün)"};
+        String[] s = {"ID", "Kitap", "Barkod", "Kullanıcı", "Verildi", "Son Teslim", "Gecikme & Ceza"};
         oduncModeliTablo = new DefaultTableModel(s, 0) {
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
@@ -684,33 +757,47 @@ public class AnaMenuUI extends JFrame {
         stilComboBox(musaitBarkodlarCB);
         musaitBarkodlariYukle(); // Listeyi veritabanından çeken metod
 
-        JTextField kullaniciAlani = tekAlaniOlustur(); kullaniciAlani.setToolTipText("Kullanıcı ID");
-        JTextField teslimAlani    = tekAlaniOlustur(); teslimAlani.setToolTipText("gg.aa.yyyy");
+        // --- KULLANICI ALANI ARTIK JCOMBOBOX ---
+        kullaniciCB = new JComboBox<>();
+        stilComboBox(kullaniciCB);
+        kullaniciCBYukle();
+
+        JTextField teslimAlani = tekAlaniOlustur(); teslimAlani.setToolTipText("gg.aa.yyyy");
         teslimAlani.setText(LocalDate.now().plusDays(14).format(TARIH_FORMAT));
 
         kart.add(formSatiri("Barkod *",        musaitBarkodlarCB));
-        kart.add(formSatiri("Kullanıcı ID *",  kullaniciAlani));
+        kart.add(formSatiri("Kullanıcı Seç *", kullaniciCB));
         kart.add(formSatiri("Teslim Tarihi *", teslimAlani));
-        kart.add(Box.createVerticalStrut(8));
+        
+        JLabel cezaBilgiOdunc = new JLabel("<html><i style='color:#6B7280; font-size:10px;'>* Gecikilen her gün için <b>" + (int)OduncIslemi.GUNLUK_CEZA_UCRETI + " TL</b> ceza işlenir.</i></html>");
+        cezaBilgiOdunc.setBorder(new EmptyBorder(4, 5, 4, 0));
+        kart.add(cezaBilgiOdunc);
+        kart.add(Box.createVerticalStrut(4));
 
         JButton btn = renkliButonOlustur("Ödünç Ver", RENK_BASARI, RENK_BASARI.brighter());
         btn.setAlignmentX(Component.CENTER_ALIGNMENT); btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
         btn.addActionListener(e -> {
-            Object secilen = musaitBarkodlarCB.getSelectedItem();
-            if (secilen == null || secilen.toString().contains("— Seçiniz") || secilen.toString().contains("Müsait Kitap Yok")) {
+            Object secilenKitap = musaitBarkodlarCB.getSelectedItem();
+            if (secilenKitap == null || secilenKitap.toString().contains("— Seçiniz") || secilenKitap.toString().contains("Müsait Kitap Yok")) {
                 JOptionPane.showMessageDialog(this, "Lütfen listeden müsait bir kitap seçin.", "Uyarı", JOptionPane.WARNING_MESSAGE); return;
             }
+            
+            Object secilenKullanici = kullaniciCB.getSelectedItem();
+            if (secilenKullanici == null || secilenKullanici.toString().contains("— Seçiniz") || secilenKullanici.toString().contains("Kullanıcı Yok")) {
+                JOptionPane.showMessageDialog(this, "Lütfen listeden ödünç alacak kullanıcıyı seçin.", "Uyarı", JOptionPane.WARNING_MESSAGE); return;
+            }
 
-            // "BRK-123456 - Suç ve Ceza" yazısından sadece barkodu koparıp alıyoruz
-            String barkod = secilen.toString().split(" - ")[0].trim();
-            String kulId  = kullaniciAlani.getText().trim();
+            // Ayrıştırma işlemleri
+            String barkod = secilenKitap.toString().split(" - ")[0].trim();
+            // "12 - Ahmet Yılmaz (ahmet@...)" yapısından numarayı çekiyoruz
+            int kid = Integer.parseInt(secilenKullanici.toString().split(" - ")[0].trim());
+
             String teslim = teslimAlani.getText().trim();
-
-            if (kulId.isEmpty() || teslim.isEmpty()) { JOptionPane.showMessageDialog(this, "Tüm alanlar zorunludur.", "Uyarı", JOptionPane.WARNING_MESSAGE); return; }
-            LocalDate td; int kid;
+            if (teslim.isEmpty()) { JOptionPane.showMessageDialog(this, "Teslim tarihi zorunludur.", "Uyarı", JOptionPane.WARNING_MESSAGE); return; }
+            
+            LocalDate td;
             try { td = LocalDate.parse(teslim, TARIH_FORMAT); } catch (DateTimeParseException ex) { JOptionPane.showMessageDialog(this, "Tarih formatı: gg.aa.yyyy", "Hata", JOptionPane.ERROR_MESSAGE); return; }
             if (td.isBefore(LocalDate.now())) { JOptionPane.showMessageDialog(this, "Teslim tarihi geçmişte olamaz.", "Uyarı", JOptionPane.WARNING_MESSAGE); return; }
-            try { kid = Integer.parseInt(kulId); } catch (NumberFormatException ex) { JOptionPane.showMessageDialog(this, "Kullanıcı ID sayısal olmalıdır.", "Hata", JOptionPane.ERROR_MESSAGE); return; }
 
             final int kIdF = kid; final LocalDate tdF = td;
             new SwingWorker<Integer, Void>() {
@@ -726,10 +813,12 @@ public class AnaMenuUI extends JFrame {
                         
                         JOptionPane.showMessageDialog(AnaMenuUI.this, msj, "İşlem Başarılı", JOptionPane.INFORMATION_MESSAGE);
                         
-                        kullaniciAlani.setText("");
+                        // Kullanici ComboBox'ı ilk seçeneğe sıfırla
+                        if(kullaniciCB.getItemCount() > 0) kullaniciCB.setSelectedIndex(0);
                         teslimAlani.setText(LocalDate.now().plusDays(14).format(TARIH_FORMAT));
                         aktifOduncleriYukle();
                         musaitBarkodlariYukle(); // Listeyi güncelle ki verdiğimiz kitap oradan kaybolsun!
+                        kullaniciCBYukle(); // Yeni kullanıcı eklendiyse formda görünsün
                         istatistikleriGuncelle();
                     }
                     catch (Exception ex) { hataGoster("Ödünç verilemedi: " + ex.getCause().getMessage()); }
@@ -738,6 +827,28 @@ public class AnaMenuUI extends JFrame {
         });
         kart.add(btn);
         return kart;
+    }
+    
+    // Kullanıcı listesini JComboBox'a çekiyoruz
+    public void kullaniciCBYukle() {
+        if (kullaniciCB == null) return;
+        new SwingWorker<List<Kullanici>, Void>() {
+            @Override protected List<Kullanici> doInBackground() { return kullaniciDAO.tumunuGetir(); }
+            @Override protected void done() {
+                try {
+                    kullaniciCB.removeAllItems();
+                    List<Kullanici> list = get();
+                    if (list.isEmpty()) {
+                        kullaniciCB.addItem("— Kullanıcı Yok —");
+                    } else {
+                        kullaniciCB.addItem("— Seçiniz —");
+                        for(Kullanici k : list) {
+                            kullaniciCB.addItem(k.getId() + " - " + k.getAdSoyad() + " (" + k.getRol() + ")");
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        }.execute();
     }
 
     // ComboBox'ı güncelleyen yardımcı metod
@@ -765,7 +876,7 @@ public class AnaMenuUI extends JFrame {
         JTextField oduncIdAlani = tekAlaniOlustur();
         kart.add(formSatiri("Ödünç ID *", oduncIdAlani));
         kart.add(Box.createVerticalStrut(6));
-        JLabel bilgi = new JLabel("<html>İade tarihi bugün olarak kaydedilir.<br>Gecikme varsa ceza otomatik hesaplanır.</html>");
+        JLabel bilgi = new JLabel("<html>İade tarihi bugün olarak kaydedilir.<br><b>Günlük gecikme cezası " + (int)OduncIslemi.GUNLUK_CEZA_UCRETI + " TL'dir.</b></html>");
         bilgi.setFont(new Font("Segoe UI", Font.ITALIC, 11)); bilgi.setForeground(RENK_METIN_SOLUK);
         bilgi.setAlignmentX(Component.LEFT_ALIGNMENT); bilgi.setBorder(new EmptyBorder(2, 2, 8, 0));
         kart.add(bilgi);
@@ -809,6 +920,29 @@ public class AnaMenuUI extends JFrame {
                                 
                             JOptionPane.showMessageDialog(AnaMenuUI.this, bMsj, "İade İşlemi Başarılı", JOptionPane.INFORMATION_MESSAGE);
                         }
+
+                        // YENİ: Rezervasyon Kontrolü
+                        int kitapIdF = -1;
+                        // Hızlıca bu kopya hangi kitaba ait bulalım
+                        try (java.sql.Connection c = util.DBConnection.getBaglanti();
+                             java.sql.PreparedStatement p = c.prepareStatement("SELECT kitap_id FROM kitap_kopyalari WHERE id=?")) {
+                            p.setInt(1, detay.getKopyaId());
+                            try (java.sql.ResultSet r = p.executeQuery()) {
+                                if (r.next()) kitapIdF = r.getInt(1);
+                            }
+                        } catch (Exception ignored) {}
+
+                        if (kitapIdF != -1) {
+                            model.Rezervasyon bekleyen = rezervasyonDAO.getIlkBekleyenRezervasyon(kitapIdF);
+                            if (bekleyen != null) {
+                                String rMsj = String.format("<html><body><h3 style='margin-top:0; color:#EF4444;'>⚠️ DİKKAT: REZERVASYON VAR</h3>" +
+                                     "İade edilen bu kitap <b>%s</b> adlı okuyucu tarafından rezerve edilmiştir.<br><br>" +
+                                     "<i>Lütfen kitabı genel raflara değil, Rezervasyon Rafına yerleştiriniz.</i></body></html>",
+                                     bekleyen.getKullaniciAdi());
+                                JOptionPane.showMessageDialog(AnaMenuUI.this, rMsj, "Rezervasyon Uyarısı", JOptionPane.WARNING_MESSAGE);
+                            }
+                        }
+
                         oduncIdAlani.setText("");
                         aktifOduncleriYukle();
                         musaitBarkodlariYukle();
@@ -829,11 +963,12 @@ public class AnaMenuUI extends JFrame {
                     oduncModeliTablo.setRowCount(0);
                     for (OduncIslemi o : get()) {
                         long gec = o.gecikmeGunSayisi();
+                        String gecBilgi = gec > 0 ? gec + " gün (" + (int)(gec * OduncIslemi.GUNLUK_CEZA_UCRETI) + " ₺)" : "Yok";
                         oduncModeliTablo.addRow(new Object[]{o.getId(), nvl(o.getKitapBaslik()), nvl(o.getBarkod()),
                                 nvl(o.getKullaniciAdi()),
                                 o.getVerilisTarihi() != null ? o.getVerilisTarihi().format(TARIH_FORMAT) : "—",
                                 o.getTeslimTarihi()  != null ? o.getTeslimTarihi().format(TARIH_FORMAT)  : "—",
-                                gec > 0 ? gec + " ⚠️" : "0"});
+                                gecBilgi});
                     }
                 } catch (Exception ex) { hataGoster("Liste yüklenemedi: " + ex.getMessage()); }
             }
@@ -1025,6 +1160,124 @@ public class AnaMenuUI extends JFrame {
         return new DefaultTableModel(new String[]{"ID", "Ad"}, 0) {
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
+    }
+
+    // ================================================================
+    // SEKME 5 — REZERVASYONLAR
+    // ================================================================
+    private JPanel rezervasyonPaneliOlustur() {
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBackground(RENK_ARKA_PLAN); panel.setBorder(new EmptyBorder(16, 16, 16, 16));
+
+        // --- Yeni Form ---
+        JPanel ustPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 10));
+        ustPanel.setBackground(RENK_KART);
+        ustPanel.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(RENK_SINIR), new EmptyBorder(10, 10, 10, 10)));
+        
+        rezKitapCB = new JComboBox<>(); stilComboBox(rezKitapCB); rezKitapCB.setPreferredSize(new Dimension(300, 36));
+        rezKullaniciCB = new JComboBox<>(); stilComboBox(rezKullaniciCB); rezKullaniciCB.setPreferredSize(new Dimension(250, 36));
+        
+        JButton btnRezerveEt = renkliButonOlustur("Rezerve Et", RENK_VURGU, RENK_VURGU_HOVER);
+        btnRezerveEt.addActionListener(e -> {
+            Object secK = rezKitapCB.getSelectedItem();
+            Object secU = rezKullaniciCB.getSelectedItem();
+            if (secK == null || secK.toString().contains("Yok") || secK.toString().contains("Seçiniz") ||
+                secU == null || secU.toString().contains("Yok") || secU.toString().contains("Seçiniz")) {
+                JOptionPane.showMessageDialog(this, "Geçerli kitap ve okuyucu seçin.", "Uyarı", JOptionPane.WARNING_MESSAGE); return;
+            }
+            int kId = Integer.parseInt(secK.toString().split(" - ")[0]);
+            int uId = Integer.parseInt(secU.toString().split(" - ")[0]);
+            new SwingWorker<Boolean, Void>() {
+                @Override protected Boolean doInBackground() { return rezervasyonDAO.rezerveEt(uId, kId); }
+                @Override protected void done() {
+                    try { if (get()) { basariMesaji("Rezervasyon başarıyla oluşturuldu."); rezervasyonlariYukle(); } else hataGoster("Eklenemedi."); }
+                    catch (Exception ex) { 
+                        Throwable t = ex.getCause() != null ? ex.getCause() : ex;
+                        hataGoster(t.getMessage()); 
+                    }
+                }
+            }.execute();
+        });
+
+        JLabel l1 = new JLabel("Kitap:"); l1.setForeground(RENK_METIN); ustPanel.add(l1); ustPanel.add(rezKitapCB);
+        JLabel l2 = new JLabel("Okuyucu:"); l2.setForeground(RENK_METIN); ustPanel.add(l2); ustPanel.add(rezKullaniciCB);
+        ustPanel.add(btnRezerveEt);
+
+        // --- Tablo ---
+        rezervasyonModeliTablo = new DefaultTableModel(new String[]{"ID", "Kitap", "Kullanıcı", "Tarih", "Durum"}, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        };
+        rezervasyonTablosu = standartTablo(rezervasyonModeliTablo);
+        rezervasyonTablosu.getColumnModel().getColumn(0).setPreferredWidth(40);
+        rezervasyonTablosu.getColumnModel().getColumn(1).setPreferredWidth(250);
+        rezervasyonTablosu.getColumnModel().getColumn(2).setPreferredWidth(180);
+
+        // --- Butonlar ---
+        JPanel altPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 10)); altPanel.setOpaque(false);
+        JButton btnTamamla = renkliButonOlustur("✔️ Tamamla", RENK_BASARI, RENK_BASARI.brighter());
+        JButton btnIptal = renkliButonOlustur("✕ İptal Et", RENK_TEHLIKE, RENK_TEHLIKE.brighter());
+        btnTamamla.addActionListener(e -> rezDurum(true));
+        btnIptal.addActionListener(e -> rezDurum(false));
+        altPanel.add(btnIptal); altPanel.add(btnTamamla);
+
+        panel.add(ustPanel, BorderLayout.NORTH);
+        panel.add(tabloSarici(rezervasyonTablosu), BorderLayout.CENTER);
+        panel.add(altPanel, BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private void rezDurum(boolean tamamlandiMi) {
+        int r = rezervasyonTablosu.getSelectedRow();
+        if (r < 0) { JOptionPane.showMessageDialog(this, "Listeden bir kayıt seçin.", "Uyarı", JOptionPane.WARNING_MESSAGE); return; }
+        int id = (int) rezervasyonModeliTablo.getValueAt(r, 0);
+        new SwingWorker<Boolean, Void>() {
+            @Override protected Boolean doInBackground() { return tamamlandiMi ? rezervasyonDAO.tamamla(id) : rezervasyonDAO.iptalEt(id); }
+            @Override protected void done() { try { if (get()) rezervasyonlariYukle(); else hataGoster("Güncellenemedi."); } catch (Exception ex) {} }
+        }.execute();
+    }
+
+    private void rezervasyonlariYukle() {
+        if (rezervasyonModeliTablo == null) return;
+        new SwingWorker<List<model.Rezervasyon>, Void>() {
+            @Override protected List<model.Rezervasyon> doInBackground() { return rezervasyonDAO.bekleyenleriGetir(); }
+            @Override protected void done() {
+                try {
+                rezervasyonModeliTablo.setRowCount(0);
+                for (model.Rezervasyon r : get())
+                    rezervasyonModeliTablo.addRow(new Object[]{r.getId(), r.getKitapBaslik(), r.getKullaniciAdi(), r.getRezervasyonTarihi().format(TARIH_FORMAT), r.getDurum()});
+                } catch (Exception ignored) {}
+            }
+        }.execute();
+    }
+
+    private void rezKitapCBYukle() {
+        if (rezKitapCB == null) return;
+        new SwingWorker<List<Kitap>, Void>() {
+            @Override protected List<Kitap> doInBackground() { return kitapDAO.tumunuGetir(); }
+            @Override protected void done() {
+                try {
+                rezKitapCB.removeAllItems();
+                List<Kitap> lst = get();
+                if (lst.isEmpty()) rezKitapCB.addItem("— Kitap Yok —");
+                else { rezKitapCB.addItem("— Kitap Seçiniz —"); lst.forEach(k -> rezKitapCB.addItem(k.getId() + " - " + k.getBaslik())); }
+                } catch (Exception ignored) {}
+            }
+        }.execute();
+    }
+
+    private void rezKullaniciCBYukle() {
+        if (rezKullaniciCB == null) return;
+        new SwingWorker<List<Kullanici>, Void>() {
+            @Override protected List<Kullanici> doInBackground() { return kullaniciDAO.tumunuGetir(); }
+            @Override protected void done() {
+                try {
+                rezKullaniciCB.removeAllItems();
+                List<Kullanici> lst = get();
+                if (lst.isEmpty()) rezKullaniciCB.addItem("— Kullanıcı Yok —");
+                else { rezKullaniciCB.addItem("— Kullanıcı Seçiniz —"); lst.forEach(k -> rezKullaniciCB.addItem(k.getId() + " - " + k.getAdSoyad())); }
+                } catch (Exception ignored) {}
+            }
+        }.execute();
     }
 
     // ---------------------------------------------------------------

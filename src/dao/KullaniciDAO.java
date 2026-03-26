@@ -242,6 +242,26 @@ public class KullaniciDAO {
     }
 
     // ---------------------------------------------------------------
+    // Kullanıcı Silme
+    // ---------------------------------------------------------------
+
+    /**
+     * Kullanıcıyı sistemden kalıcı olarak siler.
+     * @param kullaniciId silinecek kullanıcının ID'si
+     * @return silme başarılıysa {@code true}
+     */
+    public boolean kullaniciSil(int kullaniciId) {
+        Connection baglanti = DBConnection.getBaglanti();
+        String sql = "DELETE FROM kullanicilar WHERE id = ?";
+        try (PreparedStatement ps = baglanti.prepareStatement(sql)) {
+            ps.setInt(1, kullaniciId);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            throw new RuntimeException("Kullanıcı silinirken hata: " + e.getMessage(), e);
+        }
+    }
+
+    // ---------------------------------------------------------------
     // Yardımcı Metodlar
     // ---------------------------------------------------------------
 
